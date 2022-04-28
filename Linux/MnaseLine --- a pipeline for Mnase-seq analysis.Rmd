@@ -1,0 +1,170 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+# MnaseLine --- a pipeline for Mnase-seq analysis
+
+## Developers
+
+Developed by: Yuan Zhen
+
+Supervisors: Pro. Fangjie Zhu
+
+Horticultural Plant Biology and Metabolomics Center,Haixia Institute of Science and Technology,Fujian Agriculture and Forestry University
+
+######################### 
+
+MnaseLine is a pipeline to analysis Mnase-seq data, starting from input Fastq/BAM files and generating alignment summary, various quality statistics, peak calling, and BigWig formatted tracks ready for visualization with R. 
+
+######################### 
+
+## Theory
+
+you can check the following papers or links for understanding Mnase-seq .
+
+-   [Genome-wide MNase hypersensitivity assay unveils distinct classes of open chromatin associated with H3K27me3 and DNA methylation in Arabidopsis thaliana \| Genome Biology \| Full Text (biomedcentral.com)](https://genomebiology.biomedcentral.com/articles/10.1186/s13059-020-1927-5)
+
+-   [Micrococcal nuclease: its specificity and use for chromatin analysis - PubMed (nih.gov)](https://pubmed.ncbi.nlm.nih.gov/2663558/)
+
+## Required packages for executing basic Mnase-seq pipeline
+
+1.  [bowtie](http://bowtie-bio.sourceforge.net/manual.shtml)  (we have used version 1.2.2 )
+2.  [cutadapt](https://cutadapt.readthedocs.io/en/stable/) (we have used version 1.15 )
+3.  [Samtools](http://www.htslib.org/) (we have used version 1.7 )
+4.  [bedtools](https://bedtools.readthedocs.io/en/latest/) (we have used version 2.26.0 )
+5.   [fseq](https://fureylab.web.unc.edu/software/fseq/ ) (we have used version 1.8.1 )
+6.  R environment (we have used 4.0.4 )
+7.  [IGV](http://www.igv.org/) (we have used version 2.8.13) (not necessary if you use R)
+8.  [Anaconda](https://www.anaconda.com/products/individual#linux) (we have used version )
+9.  [axel](https://github.com/axel-download-accelerator/axel) (not necessary if you internet speed is fine)
+10. Utilities "bedGraphToBigWig", "bedSort", "bigBedToBed", "hubCheck" and "fetchChromSizes" downloaded from UCSC repository. Executables corresponding to the linux system, for example, is provided in this link: <http://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/>
+
+all of this packages you can use scripts dlpk.sh in addenda
+
+## Packages to be installed for peak analysis
+
+we use Rstiduo to analysis,you should install the R packages: ChiPseeker, GenomicFeatures, ggplot2， plotly
+
+Also install the bioconductor and bioconductor package Rsamtools.
+
+## Execution of basic Mnase-seq pipeline
+
+Current package includes a sample script file "mnase_seq.sh".,we suggest you that it's better to make a conda environment for your own Mnase-seq.It conains sample commands required to invoke the main :
+
+``` bash
+#Mnase-seq_clean_reads
+
+cutadapt -a CCGATCT -A AGATCGG --cores=8  --minimum-length=10 --output=output.r1 --paired-output=output.r2 SRR1536110_1.fastq.gz SRR1536110_2.fastq.gz
+
+#Mnase-seq alignment
+##Make an index (if your reference genome is so large you should better use the parameter:--large-index)
+
+bowtie-build TAIR10_chr_all.fas araindex
+
+##Use bowtie to aligne the sequnce with reference (if you index is so large,you should use the parameter:--large-size)
+
+bowtie -v 2 -I 100 -X 200 --fr --nomaqround --best -S -p 4 --al ~/mnasetest-aligned.fastq --un ~/mnasetest-unaligned.fastq ~/mnasetest/forindex/araindex -1 output.r1 -2 output.r2 | samtools view -buh -f 0x2 - | samtools sort -T .mnasetest -@ 4 -o output.bam
+
+##you can use this code to make a .bam.bai so that you can use this file with .bam file to visualize your peak in IGV
+
+samtools index -b output.bam
+
+## a list for the number of reads length(the next code just for chloroplast not for all chromosome, then you can use ggplot2 to visualize)
+cat l256.sam | grep -E 'chloroplast' | sed '1d' | awk '{print $3,$6}' > l256chl.text       
+sed -i 's/M//' l256chl.text  
+
+# transfrom .bam file to .bed file
+
+bedtools bamtobed -i output.bam > output.bed
+
+# use fseq to peakcalling（cautions:if your bedfile is so large,you will meet the problem “OutOfMemory” exception.WITH THIS ERRORS YOU CAN JUST to increase the available memory to the java virtual machine, edit‘bin/fseq’ file and change the JAVA_OPTS property to increase the heap size(default is 800).you should know your Linux CPU usage (in your terminal type the code:free -m) and make "-Xmx800m" to "-Xmx(more than the size of your bedfile,if your Linux permit)m"
+
+./fseq -v -of npf  output.bed
+
+mkdir  your.npf
+
+mv *.npf your.npf
+
+cd your.npf
+
+touch yourallpeak
+
+### fseq will give you seven peak files with each chromosome,so we can put those files in a file for the next R analysis
+cp Chr1.npf yourallpeak
+
+cat Chr2.npf >> yourallpeak
+cat Chr3.npf >> yourallpeak
+cat Chr4.npf >> yourallpeak
+cat Chr5.npf >> yourallpeak
+cat chloroplast.npf >> yourallpeak
+cat mitochondria.npf >> yourallpeak
+
+### it will be no errors with next R analysis if you change "mitochondria" and "chloroplast" to "ChrM" and "Chrc"
+sed -i 's/mitochondria/ChrM/g' yourallpeak
+sed -i 's/chloroplast/ChrC/g' yourallpeak
+```
+
+
+
+## visualize with Rstiduo
+
+```R
+#if you don't have GenomicFeatures,ChiPseeker,ggplot2,tidyverse you should download them in R (code in appendix)
+library(tidyverse)
+library(GenomicFeatures)
+library(ChiPseeker)
+library(ggplot2)
+
+#ChIPseeker provides readPeakFile to load the peak and store in GRanges object.
+peaktest <- readPeakFile(yourallpeak)
+
+#After peak calling, we would like to know the peak locations over the whole genome, covplot function calculates the coverage of peak regions over chromosomes and generate a figure to visualize. GRangesList is also supported and can be used to compare coverage of multiple bed files.
+covplot(peaktest,weightCol=7)
+
+##to use arabidopsis genome annotation file make promoter file
+aragff <- makeTxDbFromGFF("TAIR10_GFF3_genes.gff")
+arapromoter <- getPromoters(TxDb=aragff, upstream=1000, downstream=1000)
+
+#First of all, for calculating the profile of ChIP peaks binding to TSS regions, we should prepare the TSS regions, which are defined as the flanking sequence of the TSS sites. Then align the peaks that are mapping to these regions, and generate the tagMatrix.
+tagMatrix <- getTagMatrix(peakt, windows=arapromoter)
+
+###In the above code, you should notice that tagMatrix is not restricted to TSS regions. The regions can be other types that defined by the user.
+plotAvgProf(tagMatrix, xlim=c(-1000, 1000), conf=0.95,resample = 1000, xlab="Genomic Region (5'->3')", ylab = "Read Count Frequency")
+```
+
+
+
+## appendix
+
+you can make a file to write down the follow code so that you can download all the packages you need .
+
+``` bash
+##Generally, it is a good idea to use Alex instead of WGET.
+apt-get install axel
+## if you use conda ,you should also download Python3.8.5
+axel -n 16 -o /YOUR/PATH/download https://www.python.org/ftp/python/3.8.5/Python-3.8.5.tgz
+#move to download directory
+bash ./Anaconda3-2020.02-Linux-x86_64.sh
+##you can create a environment "yourenvname"
+conda create --name yourenvname python=3.8
+##you can leave your env :conda deactivate
+## then you can use conda to download all of those packages
+conda install -c bioconda cutadapt
+conda install -c bioconda bowtie
+conda install -c bioconda samtools
+conda install -c bioconda bedtools
+```
+
+
+
+```R
+###install tidyverse in R
+install.packages("tidyverse")
+###you can install GenomicFeatures,ChiPseeker,ggplot2 withBiocManager
+install.packages("BiocManager")
+BiocManager::install("GenomicFeatures")
+BiocManager::install("ChiPseeker")
+BiocManager::install("ggplot2")
+```
+
